@@ -1,7 +1,7 @@
 name: EOD NSE Report
 on:
   schedule:
-    - cron: '0 15 * * 1-5'
+    - cron: '0 15 * * 1-5' # 8:30 PM IST
   workflow_dispatch:
 
 jobs:
@@ -9,17 +9,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          
       - run: pip install yfinance pandas numpy pytz requests
+      
+      - name: Restore history cache
+        uses: actions/cache/restore@v4
+        with:
+          path: eod_history.json
+          key: eod-history-${{ github.run_id }}
+          restore-keys: eod-history-
+          
       - name: Run EOD Report
         run: python eod_report.py
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
-      - uses: stefanzweifel/git-auto-commit-action@v5
+          
+      - name: Save history cache
+        uses: actions/cache/save@v4
         with:
-          commit_message: Update EOD history
-          file_pattern: eod_history.json
+          path: eod_history.json
+          key: eod-history-${{ github.run_id }}
