@@ -1,39 +1,25 @@
 name: EOD NSE Report
 on:
   schedule:
-    - cron: '0 15 * * 1-5' # 8:30 PM IST = 15:00 UTC
+    - cron: '0 15 * * 1-5'
   workflow_dispatch:
 
 jobs:
   eod:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - run: pip install yfinance pandas numpy pytz requests
-
-      - name: Create empty history if missing
-        run: echo '{}' > eod_history.json
-
       - name: Run EOD Report
         run: python eod_report.py
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
-
-      - name: Commit history
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add eod_history.json
-          git diff --staged --quiet || git commit -m "Update EOD history"
-          git push
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: Update EOD history
+          file_pattern: eod_history.json
