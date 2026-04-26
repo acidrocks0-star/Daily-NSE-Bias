@@ -5,66 +5,45 @@ import requests
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
 from io import StringIO
-import json
 
 report = f"NSE EOD Report - {datetime.now().strftime('%d %b %Y, %A')}\n"
 report += f"Generated: {datetime.now().strftime('%I:%M %p')} IST\n\n"
 
 def get_gift_nifty():
-    # Investing.com has live Gift Nifty with no auth
+    # Use Yahoo Finance SGX Nifty futures - ticker ^NSEI but 15min delay is better than nothing
+    # Alternative: Use Nifty 50 + 50 points offset as crude proxy
     try:
-        url = "https://api.investing.com/api/financialdata/1175151/chart/?period=P1D&interval=PT1M"
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Domain-Id": "www"
-        }
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code == 200:
-            j = r.json()
-            candles = j.get('data', [])
-            if len(candles) >= 2:
-                last = candles[-1][1] # close price
-                prev = candles[-2][1]
-                pct = ((last - prev) / prev) * 100 if prev else 0
-                out = f"=== GIFT NIFTY ===\n"
-                out += f"LTP: {last:.2f} ({pct:+.2f}%) - Live\n\n"
-                return out
-    except: pass
-
-    try:
-        # Fallback: NSE IFSC direct
-        url = "https://www.nseifsc.com/api/market-data/equity-derivatives/GIFT%20NIFTY"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code == 200:
-            d = r.json()
-            ltp = float(d.get('lastPrice', 0))
-            pct = float(d.get('pChange', 0))
-            if ltp > 0:
-                out = f"=== GIFT NIFTY ===\n"
-                out += f"LTP: {ltp:.2f} ({pct:+.2f}%)\n\n"
-                return out
-    except: pass
-
-    return f"=== GIFT NIFTY ===\nData unavailable - market may be closed\n\n"
+        nifty = yf.Ticker("^NSEI")
+        hist = nifty.history(period="2d", interval="5m")
+        if len(hist) >= 2:
+            ltp = hist['Close'].iloc[-1]
+            # Gift Nifty typically trades 40-80 points above Nifty50 spot
+            gift_est = ltp + 60 # avg premium
+            pct = ((ltp - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100
+            out = f"=== GIFT NIFTY ===\n"
+            out += f"Est LTP: {gift_est:.2f} ({pct:+.2f}%) *Nifty50+60pts*\n"
+            out += f"Note: Real-time Gift Nifty blocked on cloud. Manual: nseifsc.com\n\n"
+            return out
+    except:
+        pass
+    return f"=== GIFT NIFTY ===\nUnavailable. Check: https://www.nseifsc.com/\n\n"
 
 def get_top_delivery_stocks():
     try:
-        # Bhavcopy uploads ~6:30 PM IST. Check if we're before that time today
         ist = timezone(timedelta(hours=5, minutes=30))
         now_ist = datetime.now(ist)
 
-        # If before 6:45 PM IST, use yesterday's data
-        start_days_back = 1 if now_ist.hour < 18 or (now_ist.hour == 18 and now_ist.minute < 45) else 0
+        # If before 7 PM IST, use yesterday. Bhavcopy uploads ~6:30-7 PM
+        start_days_back = 1 if now_ist.hour < 19 else 0
 
-        for days_back in range(start_days_back, start_days_back + 5):
+        for days_back in range(start_days_back, start_days_back + 7):
             date_obj = datetime.now() - timedelta(days=days_back)
             if date_obj.weekday() >= 5: # Skip Sat/Sun
                 continue
 
             date_str = date_obj.strftime('%d%m%Y')
             url = f"https://archives.nseindia.com/products/content/sec_bhavdata_full_{date_str}.csv"
-            headers = {"User-Agent": "Mozilla/5.0"}
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
             r = requests.get(url, headers=headers, timeout=15)
 
             if r.status_code == 200 and 'SYMBOL' in r.text and len(r.text) > 1000:
@@ -77,8 +56,9 @@ def get_top_delivery_stocks():
                 df = df[df['SERIES'] == 'EQ']
                 df['DELIV_PER'] = pd.to_numeric(df['DELIV_PER'], errors='coerce')
                 df['TTL_TRD_QNTY'] = pd.to_numeric(df['TTL_TRD_QNTY'], errors='coerce')
-                df = df.dropna(subset=['DELIV_PER', 'TTL_TRD_QNTY'])
-                df = df[(df['DELIV_PER'] > 0) & (df['TTL_TRD_QNTY'] > 10000)] # Filter penny stocks
+                df['CLOSE_PRICE'] = pd.to_numeric(df['CLOSE_PRICE'], errors='coerce')
+                df = df.dropna(subset=['DELIV_PER', 'TTL_TRD_QNTY', 'CLOSE_PRICE'])
+                df = df[(df['DELIV_PER'] > 0) & (df['TTL_TRD_QNTY'] > 50000) & (df['CLOSE_PRICE'] > 20)]
 
                 if len(df) == 0:
                     continue
@@ -91,12 +71,12 @@ def get_top_delivery_stocks():
                 out += "\n"
                 return out
 
-        return f"=== DELIVERY DATA ===\nBhavcopy not available. NSE uploads after 6:30 PM IST\n\n"
+        return f"=== DELIVERY DATA ===\nBhavcopy not available. Runs after 6:30 PM IST\n\n"
     except Exception as e:
         return f"=== DELIVERY DATA ===\nFailed: {str(e)[:150]}\n\n"
 
 def get_fii_dii():
-    return f"=== FII/DII + PRO ===\nCheck manually: https://www.nseindia.com/reports/fii-dii\nReason: NSE blocks cloud IPs\n\n"
+    return f"=== FII/DII + PRO ===\nManual: https://www.nseindia.com/reports/fii-dii\n*Cloud IPs blocked by NSE*\n\n"
 
 try:
     stocks = [
