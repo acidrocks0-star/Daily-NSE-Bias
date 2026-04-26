@@ -1,0 +1,27 @@
+name: EOD NSE Report
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 15 * * 1-5' # 8:30 PM IST = 15:00 UTC Mon-Fri
+
+jobs:
+  eod:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install yfinance pandas numpy pytz requests
+
+      - name: Run EOD Report
+        run: python eod_report.py
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
