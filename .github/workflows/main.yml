@@ -1,7 +1,7 @@
 name: EOD NSE Report
 on:
   schedule:
-    - cron: '0 15 * * 1-5' # 8:30 PM IST
+    - cron: '0 15 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -9,22 +9,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          
       - run: pip install yfinance pandas numpy pytz requests
       
-      - name: Restore history
-        uses: actions/cache@v4
+      - name: Download previous history
+        uses: actions/download-artifact@v4
         with:
-          path: eod_history.json
-          key: eod-history-${{ runner.os }}
-          restore-keys: eod-history-
-          
-      - name: Init history if missing
-        run: test -f eod_history.json || echo '{}' > eod_history.json
+          name: eod-history
+          path: .
+        continue-on-error: true
           
       - name: Run EOD Report
         run: python eod_report.py
@@ -32,3 +27,10 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          
+      - name: Upload history
+        uses: actions/upload-artifact@v4
+        with:
+          name: eod-history
+          path: eod_history.json
+          retention-days: 90
