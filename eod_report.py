@@ -11,41 +11,49 @@ report += f"Generated: {datetime.now().strftime('%I:%M %p')} IST\n\n"
 
 def get_fii_dii():
     try:
-        # NSE CSV - more stable than JSON API
-        url = "https://www.nseindia.com/api/reports?archieves=[{%22name%22:%22FII_DII%22,%22type%22:%22daily%22,%22category%22:%22capitalMarket%22,%22section%22:%22equity%22}]"
+        # NSE CSV - bypasses JSON API blocks
+        url = "https://www.nseindia.com/reports/fii-dii"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-            "Referer": "https://www.nseindia.com/reports/fii-dii"
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1"
         }
         session = requests.Session()
-        session.get("https://www.nseindia.com", headers=headers, timeout=10)
         r = session.get(url, headers=headers, timeout=15)
 
-        if r.status_code!= 200:
-            return f"=== FII/DII ===\nNSE blocked request: {r.status_code}\n\n"
+        # Parse HTML table - NSE embeds data in script tag now
+        if "fiiDiiData" not in r.text:
+            return f"=== FII/DII ===\nNSE page changed. Manual check: https://www.nseindia.com/reports/fii-dii\n\n"
 
-        data = r.json()
+        # Extract JSON from page
+        import re
+        match = re.search(r'var fiiDiiData = (\[.*?\]);', r.text)
+        if not match:
+            return f"=== FII/DII ===\nCould not parse NSE data\n\n"
+
+        data = json.loads(match.group(1))
         if not data:
-            return f"=== FII/DII ===\nEmpty response from NSE\n\n"
+            return f"=== FII/DII ===\nEmpty data\n\n"
 
         d = data[0]
         out = f"=== FII/DII + PRO - {d.get('date', 'N/A')} ===\n"
 
-        # Try multiple key variations NSE uses
-        fii_cash = float(d.get('fiiCashBuyValue', d.get('fii_buy_value', 0))) - float(d.get('fiiCashSellValue', d.get('fii_sell_value', 0)))
-        dii_cash = float(d.get('diiCashBuyValue', d.get('dii_buy_value', 0))) - float(d.get('diiCashSellValue', d.get('dii_sell_value', 0)))
-        pro_cash = float(d.get('proCashBuyValue', d.get('pro_buy_value', 0))) - float(d.get('proCashSellValue', d.get('pro_sell_value', 0)))
+        fii_cash = float(d.get('fiiBuyValue', 0)) - float(d.get('fiiSellValue', 0))
+        dii_cash = float(d.get('diiBuyValue', 0)) - float(d.get('diiSellValue', 0))
+        pro_cash = float(d.get('proBuyValue', 0)) - float(d.get('proSellValue', 0))
         out += f"Cash: FII {fii_cash:+.0f}Cr | DII {dii_cash:+.0f}Cr | PRO {pro_cash:+.0f}Cr\n"
 
-        fii_idx_fut = float(d.get('fiiIndexFutBuyValue', d.get('fii_index_fut_buy', 0))) - float(d.get('fiiIndexFutSellValue', d.get('fii_index_fut_sell', 0)))
-        dii_idx_fut = float(d.get('diiIndexFutBuyValue', d.get('dii_index_fut_buy', 0))) - float(d.get('diiIndexFutSellValue', d.get('dii_index_fut_sell', 0)))
-        pro_idx_fut = float(d.get('proIndexFutBuyValue', d.get('pro_index_fut_buy', 0))) - float(d.get('proIndexFutSellValue', d.get('pro_index_fut_sell', 0)))
+        fii_idx_fut = float(d.get('fiiIndexFutBuy', 0)) - float(d.get('fiiIndexFutSell', 0))
+        dii_idx_fut = float(d.get('diiIndexFutBuy', 0)) - float(d.get('diiIndexFutSell', 0))
+        pro_idx_fut = float(d.get('proIndexFutBuy', 0)) - float(d.get('proIndexFutSell', 0))
         out += f"Index Fut: FII {fii_idx_fut:+.0f}Cr | DII {dii_idx_fut:+.0f}Cr | PRO {pro_idx_fut:+.0f}Cr\n"
 
-        fii_idx_opt = float(d.get('fiiIndexOptBuyValue', d.get('fii_index_opt_buy', 0))) - float(d.get('fiiIndexOptSellValue', d.get('fii_index_opt_sell', 0)))
-        dii_idx_opt = float(d.get('diiIndexOptBuyValue', d.get('dii_index_opt_buy', 0))) - float(d.get('diiIndexOptSellValue', d.get('dii_index_opt_sell', 0)))
-        pro_idx_opt = float(d.get('proIndexOptBuyValue', d.get('pro_index_opt_buy', 0))) - float(d.get('proIndexOptSellValue', d.get('pro_index_opt_sell', 0)))
+        fii_idx_opt = float(d.get('fiiIndexOptBuy', 0)) - float(d.get('fiiIndexOptSell', 0))
+        dii_idx_opt = float(d.get('diiIndexOptBuy', 0)) - float(d.get('diiIndexOptSell', 0))
+        pro_idx_opt = float(d.get('proIndexOptBuy', 0)) - float(d.get('proIndexOptSell', 0))
         out += f"Index Opt: FII {fii_idx_opt:+.0f}Cr | DII {dii_idx_opt:+.0f}Cr | PRO {pro_idx_opt:+.0f}Cr\n"
 
         total_fii = fii_cash + fii_idx_fut + fii_idx_opt
@@ -64,23 +72,38 @@ def get_fii_dii():
         out += f"PRO {bias(total_pro)} ({total_pro:+.0f}Cr)\n\n"
         return out
     except Exception as e:
-        return f"=== FII/DII ===\nData failed: {str(e)[:200]}\n\n"
+        return f"=== FII/DII ===\nFailed: {str(e)[:200]}\nCheck: https://www.nseindia.com/reports/fii-dii\n\n"
 
 def get_gift_nifty():
     try:
-        # Use Yahoo Finance for Gift Nifty - ticker GIFTNIFTY.NS
-        gift = yf.Ticker("GIFTNIFTY.NS")
-        hist = gift.history(period="2d")
-        if len(hist) >= 2:
-            ltp = hist['Close'].iloc[-1]
-            prev = hist['Close'].iloc[-2]
-            pct = ((ltp - prev) / prev) * 100
+        # NSE IFSC website - official source
+        url = "https://www.nseifsc.com/market-data/live-market-indices"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=10)
+
+        # Parse GIFT Nifty from HTML
+        import re
+        match = re.search(r'GIFT Nifty.*?([\d,]+\.?\d*)', r.text)
+        if match:
+            price = float(match.group(1).replace(',', ''))
             out = f"=== GIFT NIFTY ===\n"
-            out += f"LTP: {ltp:.2f} ({pct:+.2f}%)\n\n"
+            out += f"LTP: {price:.2f}\n\n"
             return out
-        return f"=== GIFT NIFTY ===\nNo data\n\n"
-    except Exception as e:
-        return f"=== GIFT NIFTY ===\nData failed: {str(e)[:150]}\n\n"
+        return f"=== GIFT NIFTY ===\nNo data on NSE IFSC\n\n"
+    except:
+        try:
+            # Fallback: Use Nifty 50 futures as proxy
+            nifty = yf.Ticker("^NSEI")
+            hist = nifty.history(period="2d")
+            if len(hist) >= 2:
+                ltp = hist['Close'].iloc[-1]
+                pct = ((ltp - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100
+                out = f"=== GIFT NIFTY ===\n"
+                out += f"*Using Nifty50 proxy - Gift data blocked*\n"
+                out += f"LTP: {ltp:.2f} ({pct:+.2f}%)\n\n"
+                return out
+        except: pass
+        return f"=== GIFT NIFTY ===\nData unavailable\n\n"
 
 try:
     stocks = [
