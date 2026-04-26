@@ -4,46 +4,48 @@ import pandas as pd
 import requests
 from email.mime.text import MIMEText
 from datetime import datetime
-import json
+from io import StringIO
 
 report = f"NSE EOD Report - {datetime.now().strftime('%d %b %Y, %A')}\n"
 report += f"Generated: {datetime.now().strftime('%I:%M %p')} IST\n\n"
 
 def get_fii_dii():
     try:
-        url = "https://www.nseindia.com/api/fiidiiTradeReact"
+        # NSE CSV - more stable than JSON API
+        url = "https://www.nseindia.com/api/reports?archieves=[{%22name%22:%22FII_DII%22,%22type%22:%22daily%22,%22category%22:%22capitalMarket%22,%22section%22:%22equity%22}]"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "application/json",
             "Referer": "https://www.nseindia.com/reports/fii-dii"
         }
         session = requests.Session()
         session.get("https://www.nseindia.com", headers=headers, timeout=10)
         r = session.get(url, headers=headers, timeout=15)
+
+        if r.status_code!= 200:
+            return f"=== FII/DII ===\nNSE blocked request: {r.status_code}\n\n"
+
         data = r.json()
+        if not data:
+            return f"=== FII/DII ===\nEmpty response from NSE\n\n"
 
-        # NSE now returns array with different keys
-        if not data or len(data) == 0:
-            return "=== FII/DII ===\nNo data returned\n\n"
-
-        d = data[0] # Latest date
+        d = data[0]
         out = f"=== FII/DII + PRO - {d.get('date', 'N/A')} ===\n"
 
-        # New NSE keys as of 2026
-        fii_cash = float(d.get('fiiCashBuyValue', 0)) - float(d.get('fiiCashSellValue', 0))
-        dii_cash = float(d.get('diiCashBuyValue', 0)) - float(d.get('diiCashSellValue', 0))
-        pro_cash = float(d.get('proCashBuyValue', 0)) - float(d.get('proCashSellValue', 0))
+        # Try multiple key variations NSE uses
+        fii_cash = float(d.get('fiiCashBuyValue', d.get('fii_buy_value', 0))) - float(d.get('fiiCashSellValue', d.get('fii_sell_value', 0)))
+        dii_cash = float(d.get('diiCashBuyValue', d.get('dii_buy_value', 0))) - float(d.get('diiCashSellValue', d.get('dii_sell_value', 0)))
+        pro_cash = float(d.get('proCashBuyValue', d.get('pro_buy_value', 0))) - float(d.get('proCashSellValue', d.get('pro_sell_value', 0)))
         out += f"Cash: FII {fii_cash:+.0f}Cr | DII {dii_cash:+.0f}Cr | PRO {pro_cash:+.0f}Cr\n"
 
-        fii_idx_fut = float(d.get('fiiIndexFutBuyValue', 0)) - float(d.get('fiiIndexFutSellValue', 0))
-        dii_idx_fut = float(d.get('diiIndexFutBuyValue', 0)) - float(d.get('diiIndexFutSellValue', 0))
-        pro_idx_fut = float(d.get('proIndexFutBuyValue', 0)) - float(d.get('proIndexFutSellValue', 0))
+        fii_idx_fut = float(d.get('fiiIndexFutBuyValue', d.get('fii_index_fut_buy', 0))) - float(d.get('fiiIndexFutSellValue', d.get('fii_index_fut_sell', 0)))
+        dii_idx_fut = float(d.get('diiIndexFutBuyValue', d.get('dii_index_fut_buy', 0))) - float(d.get('diiIndexFutSellValue', d.get('dii_index_fut_sell', 0)))
+        pro_idx_fut = float(d.get('proIndexFutBuyValue', d.get('pro_index_fut_buy', 0))) - float(d.get('proIndexFutSellValue', d.get('pro_index_fut_sell', 0)))
         out += f"Index Fut: FII {fii_idx_fut:+.0f}Cr | DII {dii_idx_fut:+.0f}Cr | PRO {pro_idx_fut:+.0f}Cr\n"
 
-        fii_idx_opt = float(d.get('fiiIndexOptBuyValue', 0)) - float(d.get('fiiIndexOptSellValue', 0))
-        dii_idx_opt = float(d.get('diiIndexOptBuyValue', 0)) - float(d.get('diiIndexOptSellValue', 0))
-        pro_idx_opt = float(d.get('proIndexOptBuyValue', 0)) - float(d.get('proIndexOptSellValue', 0))
+        fii_idx_opt = float(d.get('fiiIndexOptBuyValue', d.get('fii_index_opt_buy', 0))) - float(d.get('fiiIndexOptSellValue', d.get('fii_index_opt_sell', 0)))
+        dii_idx_opt = float(d.get('diiIndexOptBuyValue', d.get('dii_index_opt_buy', 0))) - float(d.get('diiIndexOptSellValue', d.get('dii_index_opt_sell', 0)))
+        pro_idx_opt = float(d.get('proIndexOptBuyValue', d.get('pro_index_opt_buy', 0))) - float(d.get('proIndexOptSellValue', d.get('pro_index_opt_sell', 0)))
         out += f"Index Opt: FII {fii_idx_opt:+.0f}Cr | DII {dii_idx_opt:+.0f}Cr | PRO {pro_idx_opt:+.0f}Cr\n"
 
         total_fii = fii_cash + fii_idx_fut + fii_idx_opt
@@ -62,27 +64,19 @@ def get_fii_dii():
         out += f"PRO {bias(total_pro)} ({total_pro:+.0f}Cr)\n\n"
         return out
     except Exception as e:
-        return f"=== FII/DII ===\nData failed: {str(e)[:150]}\n\n"
+        return f"=== FII/DII ===\nData failed: {str(e)[:200]}\n\n"
 
 def get_gift_nifty():
     try:
-        # Use Investing.com - more stable
-        url = "https://api.investing.com/api/financialdata/1175151/chart/?period=P1D&interval=PT5M"
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Domain-Id": "www"
-        }
-        r = requests.get(url, headers=headers, timeout=10)
-        data = r.json()
-        candles = data['data']
-        if candles and len(candles) > 0:
-            last_candle = candles[-1]
-            price = last_candle[1] # Close
-            prev_close = candles[-2][1] if len(candles) > 1 else price
-            change = price - prev_close
-            pct = (change / prev_close * 100) if prev_close else 0
+        # Use Yahoo Finance for Gift Nifty - ticker GIFTNIFTY.NS
+        gift = yf.Ticker("GIFTNIFTY.NS")
+        hist = gift.history(period="2d")
+        if len(hist) >= 2:
+            ltp = hist['Close'].iloc[-1]
+            prev = hist['Close'].iloc[-2]
+            pct = ((ltp - prev) / prev) * 100
             out = f"=== GIFT NIFTY ===\n"
-            out += f"LTP: {price:.2f} ({pct:+.2f}%)\n\n"
+            out += f"LTP: {ltp:.2f} ({pct:+.2f}%)\n\n"
             return out
         return f"=== GIFT NIFTY ===\nNo data\n\n"
     except Exception as e:
