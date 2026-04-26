@@ -1,33 +1,41 @@
 name: EOD NSE Report
 on:
   schedule:
-    - cron: '0 15 * * 1-5'
+    - cron: '0 15 * * 1-5' # 8:30 PM IST = 15:00 UTC Mon-Fri
   workflow_dispatch:
 
 jobs:
   eod:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install yfinance pandas numpy pytz requests
-      
+
+      - name: Install deps
+        run: pip install yfinance pandas numpy pytz requests
+
       - name: Download previous history
         uses: actions/download-artifact@v4
         with:
           name: eod-history
-          path: .
+          path:.
         continue-on-error: true
-          
+
+      - name: Init history if missing
+        run: test -f eod_history.json || echo '{}' > eod_history.json
+
       - name: Run EOD Report
         run: python eod_report.py
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
-          
+
       - name: Upload history
         uses: actions/upload-artifact@v4
         with:
