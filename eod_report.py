@@ -133,3 +133,15 @@ def main():
 
 if __name__ == '__main__':
     main()
+import smtplib, os
+from email.mime.text import MIMEText
+
+msg = MIMEText("Test from GitHub Actions")
+msg['Subject'] = 'Test'
+msg['From'] = os.getenv('GMAIL_USER')
+msg['To'] = os.getenv('TO_EMAIL')
+
+with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+    smtp.login(os.getenv('GMAIL_USER'), os.getenv('GMAIL_PASS'))
+    smtp.send_message(msg)
+print("Mail sent successfully")
