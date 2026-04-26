@@ -16,26 +16,28 @@ def get_report():
     report += f"Generated: {datetime.now().strftime('%I:%M %p')} IST\n\n"
 
     def indices():
-        nifty = yf.Ticker("^NSEI")
+        # Use NIFTYBEES for volume data since ^NSEI has no volume
+        nifty = yf.Ticker("NIFTYBEES.NS")
         hist = nifty.history(period="1mo")
-        hist = hist[hist['Volume'] > 0].tail(5) # Last 5 trading days
+        hist = hist[hist['Volume'] > 0].tail(5)
 
         out = f"=== NIFTY 50 - LAST 5 TRADING DAYS ===\n"
-        out += f"Date | Close | Chg% | Volume\n"
+        out += f"Date | Close* | Chg% | Volume\n"
         out += f"-----------|----------|--------|--------\n"
 
         for i in range(len(hist)):
             date = hist.index[i].strftime('%d %b')
-            close = hist['Close'].iloc[i]
-            vol = hist['Volume'].iloc[i] / 10000000 # Cr
+            close = hist['Close'].iloc[i] * 100 # NIFTYBEES is 1/100th of Nifty
+            vol = hist['Volume'].iloc[i] / 100000 # Lakhs
             if i == 0:
                 chg = 0
             else:
-                chg = ((close - hist['Close'].iloc[i-1]) / hist['Close'].iloc[i-1]) * 100
-            out += f"{date} | {close:8.2f} | {chg:6.2f}% | {vol:5.1f}Cr\n"
+                chg = ((close - hist['Close'].iloc[i-1]*100) / (hist['Close'].iloc[i-1]*100) * 100
+            out += f"{date} | {close:8.2f} | {chg:6.2f}% | {vol:5.1f}L\n"
 
         chg_5d = ((hist['Close'].iloc[-1] - hist['Close'].iloc[0]) / hist['Close'].iloc[0]) * 100
-        out += f"\n5-Day Return: {chg_5d:.2f}%\n"
+        out += f"\n*Price via NIFTYBEES ETF x100\n"
+        out += f"5-Day Return: {chg_5d:.2f}%\n"
         out += f"Period: {hist.index[0].strftime('%d %b')} to {hist.index[-1].strftime('%d %b')}\n\n"
         return out
 
@@ -59,10 +61,10 @@ def get_report():
         gainers = sec_df[sec_df['pct'] > 0].nlargest(5, 'pct')
         losers = sec_df[sec_df['pct'] <= 0].nsmallest(5, 'pct')
 
-        out = f"=== SECTORS 5-DAY ===\nTop 5 Gainers:\n"
+        out = f"=== SECTORS 5-DAY ===\nTop Gainers:\n"
         for _, row in gainers.iterrows():
             out += f"{row['name']}: {row['pct']:.2f}%\n"
-        out += f"\nTop 5 Losers:\n"
+        out += f"\nTop Losers:\n"
         for _, row in losers.iterrows():
             out += f"{row['name']}: {row['pct']:.2f}%\n\n"
         return out
@@ -72,11 +74,13 @@ def get_report():
             "RELIANCE.NS","TCS.NS","HDFCBANK.NS","ICICIBANK.NS","INFY.NS","HINDUNILVR.NS","ITC.NS",
             "SBIN.NS","BHARTIARTL.NS","KOTAKBANK.NS","LT.NS","AXISBANK.NS","ASIANPAINT.NS","MARUTI.NS",
             "SUNPHARMA.NS","TITAN.NS","BAJFINANCE.NS","ULTRACEMCO.NS","WIPRO.NS","NESTLEIND.NS",
-            "ADANIENT.NS","ADANIPORTS.NS","CIPLA.NS","COALINDIA.NS","DRREDDY.NS","HCLTECH.NS",
-            "HINDALCO.NS","TATAMOTORS.NS","TATASTEEL.NS","TECHM.NS"
+            "CIPLA.NS","COALINDIA.NS","DRREDDY.NS","HCLTECH.NS","HINDALCO.NS","TECHM.NS"
         ]
         data = yf.download(stocks, period="1mo", group_by='ticker', progress=False)
+
+        # First calculate 5-day returns to find top movers
         stock_perf = []
+        stock_hist = {}
         for stock in stocks:
             try:
                 h = data[stock]
@@ -88,22 +92,46 @@ def get_report():
                 stock_perf.append({
                     "symbol": stock.replace(".NS", ""),
                     "pct": pct_5d,
-                    "ltp": h['Close'].iloc[-1],
                     "vol_surge": vol_surge,
-                    "vol": h['Volume'].iloc[-1]
+                    "hist": h
                 })
+                stock_hist[stock.replace(".NS", "")] = h
             except: continue
 
         df = pd.DataFrame(stock_perf)
-        out = f"=== STOCKS 5-DAY ===\nTop 5 Gainers:\n"
-        for _, row in df.nlargest(5, 'pct').iterrows():
-            out += f"{row['symbol']}: {row['ltp']:.2f} ({row['pct']:.2f}%)\n"
-        out += f"\nTop 5 Losers:\n"
-        for _, row in df.nsmallest(5, 'pct').iterrows():
-            out += f"{row['symbol']}: {row['ltp']:.2f} ({row['pct']:.2f}%)\n"
-        out += f"\nTop 5 Volume Surge:\n"
+        top_gainers = df.nlargest(5, 'pct')
+        top_losers = df.nsmallest(5, 'pct')
+
+        out = f"=== TOP 5 GAINERS - 5 DAY BREAKDOWN ===\n"
+        for _, row in top_gainers.iterrows():
+            h = stock_hist[row['symbol']]
+            out += f"\n{row['symbol']}: {row['pct']:.2f}% in 5 days\n"
+            out += f"Date | Close | Chg% | Vol(L)\n"
+            out += f"-----|-------|------|--------\n"
+            for i in range(len(h)):
+                d = h.index[i].strftime('%d %b')
+                c = h['Close'].iloc[i]
+                v = h['Volume'].iloc[i] / 100000
+                chg = 0 if i == 0 else ((c - h['Close'].iloc[i-1]) / h['Close'].iloc[i-1]) * 100
+                out += f"{d} | {c:7.2f} | {chg:5.2f}% | {v:6.1f}\n"
+
+        out += f"\n=== TOP 5 LOSERS - 5 DAY BREAKDOWN ===\n"
+        for _, row in top_losers.iterrows():
+            h = stock_hist[row['symbol']]
+            out += f"\n{row['symbol']}: {row['pct']:.2f}% in 5 days\n"
+            out += f"Date | Close | Chg% | Vol(L)\n"
+            out += f"-----|-------|------|--------\n"
+            for i in range(len(h)):
+                d = h.index[i].strftime('%d %b')
+                c = h['Close'].iloc[i]
+                v = h['Volume'].iloc[i] / 100000
+                chg = 0 if i == 0 else ((c - h['Close'].iloc[i-1]) / h['Close'].iloc[i-1]) * 100
+                out += f"{d} | {c:7.2f} | {chg:5.2f}% | {v:6.1f}\n"
+
+        out += f"\n=== TOP 5 VOLUME SURGE ===\n"
         for _, row in df.nlargest(5, 'vol_surge').iterrows():
-            out += f"{row['symbol']}: {row['vol_surge']:.0f}% ({row['vol']/100000:.1f}L)\n\n"
+            out += f"{row['symbol']}: {row['vol_surge']:.0f}% surge\n"
+        out += "\n"
         return out
 
     report += safe_section("INDICES", indices)
