@@ -1,158 +1,142 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import smtplib, os, json, requests
-from email.mime.text import MIMEText
 from datetime import datetime, time
 import pytz
+import json
+import smtplib
+from email.mime.text import MIMEText
+import os
+import requests
 
-IST = pytz.timezone('Asia/Kolkata')
-now_ist = datetime.now(IST)
-if not (now_ist.time() >= time(20,0) and now_ist.weekday() < 5): exit()
-
+# ========== CONFIG ==========
+SECTORS = {
+    'AUTO': ['MARUTI.NS', 'M&M.NS', 'TATAMOTORS.NS', 'BAJAJ-AUTO.NS', 'EICHERMOT.NS'],
+    'BANK': ['HDFCBANK.NS', 'ICICIBANK.NS', 'SBIN.NS', 'KOTAKBANK.NS', 'AXISBANK.NS'],
+    'IT': ['TCS.NS', 'INFY.NS', 'HCLTECH.NS', 'WIPRO.NS', 'TECHM.NS'],
+    'PHARMA': ['SUNPHARMA.NS', 'DRREDDY.NS', 'CIPLA.NS', 'DIVISLAB.NS', 'LUPIN.NS'],
+    'FMCG': ['HINDUNILVR.NS', 'ITC.NS', 'NESTLEIND.NS', 'BRITANNIA.NS', 'DABUR.NS'],
+    'METAL': ['TATASTEEL.NS', 'JSWSTEEL.NS', 'HINDALCO.NS', 'COALINDIA.NS', 'VEDL.NS'],
+    'ENERGY': ['RELIANCE.NS', 'ONGC.NS', 'NTPC.NS', 'POWERGRID.NS', 'BPCL.NS'],
+    'REALTY': ['DLF.NS', 'GODREJPROP.NS', 'OBEROIRLTY.NS', 'PHOENIXLTD.NS', 'PRESTIGE.NS']
+}
+NIFTY = '^NSEI'
 HISTORY_FILE = 'eod_history.json'
-DATE = now_ist.strftime('%m-%d')
+# ============================
 
-# 1. FII/DII Data with futures/options split
-try:
-    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://www.nseindia.com'}
-    sess = requests.Session()
-    sess.get("https://www.nseindia.com", headers=headers, timeout=5)
-    nse = sess.get("https://www.nseindia.com/api/fiidiiTradeReact", headers=headers, timeout=10).json()
-
-    fii_cash = float(nse['fii']['buyValue'] - nse['fii']['sellValue']) / 10000000
-    dii_cash = float(nse['dii']['buyValue'] - nse['dii']['sellValue']) / 10000000
-    fii_index_fut = float(nse['fii'].get('indexFutBuyValue',0) - nse['fii'].get('indexFutSellValue',0)) / 10000000
-    fii_index_opt = float(nse['fii'].get('indexOptBuyValue',0) - nse['fii'].get('indexOptSellValue',0)) / 10000000
-    fii_stock_fut = float(nse['fii'].get('stockFutBuyValue',0) - nse['fii'].get('stockFutSellValue',0)) / 10000000
-    fii_stock_opt = float(nse['fii'].get('stockOptBuyValue',0) - nse['fii'].get('stockOptSellValue',0)) / 10000000
-
-    fii_fut_total = fii_index_fut + fii_stock_fut
-    fii_opt_total = fii_index_opt + fii_stock_opt
-except:
-    fii_cash = dii_cash = fii_fut_total = fii_opt_total = 0
-
-# 2. Sectors - daily top 5 and bottom 5
-sectors = {'BANK': '^NSEBANK', 'IT': '^CNXIT', 'AUTO': '^CNXAUTO', 'FMCG': '^CNXFMCG',
-           'PHARMA': '^CNXPHARMA', 'METAL': '^CNXMETAL', 'REALTY': '^CNXREALTY', 'ENERGY': '^CNXENERGY'}
-sector_perf = {}
-for name, sym in sectors.items():
+def get_fii_dii():
     try:
-        h = yf.Ticker(sym).history(period='2d')['Close']
-        if len(h) == 2: sector_perf[name] = round((h.iloc[-1]/h.iloc[-2]-1)*100, 1)
-    except: continue
+        url = 'https://www.nseindia.com/api/fiidiiTradeReact'
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(url, headers=headers, timeout=10)
+        data = r.json()
+        fii = float(data['fii'][0]['buyValue']) - float(data['fii'][0]['sellValue'])
+        dii = float(data['dii'][0]['buyValue']) - float(data['dii'][0]['sellValue'])
+        return fii/100, dii/100 # convert to Cr
+    except:
+        return 0, 0
 
-top5_sectors = [s[0] for s in sorted(sector_perf.items(), key=lambda x: x[1], reverse=True)[:5]]
-bottom5_sectors = [s[0] for s in sorted(sector_perf.items(), key=lambda x: x[1])[:5]]
+def get_sector_data():
+    data = {}
+    for sector, stocks in SECTORS.items():
+        df = yf.download(stocks, period='5d', interval='1d', progress=False)['Close']
+        if df.empty: continue
+        ret = df.pct_change().iloc[-1] * 100
+        vol_ratio = df.iloc[-1] / df.iloc[-2]
+        data[sector] = {
+            'return': round(ret.mean(), 2),
+            'breadth': round((ret > 0).sum() / len(ret) * 100, 0),
+            'volume': round(vol_ratio.mean(), 2)
+        }
+    return data
 
-# 3. Stocks - daily top 5 gainers and losers
-nifty50 = ['RELIANCE.NS','TCS.NS','HDFCBANK.NS','ICICIBANK.NS','INFY.NS','ITC.NS','SBIN.NS','LT.NS','AXISBANK.NS','KOTAKBANK.NS',
-           'MARUTI.NS','SUNPHARMA.NS','HCLTECH.NS','WIPRO.NS','ONGC.NS','NTPC.NS','TATAMOTORS.NS','BAJFINANCE.NS','ADANIENT.NS','TITAN.NS',
-           'ASIANPAINT.NS','NESTLEIND.NS','ULTRACEMCO.NS','POWERGRID.NS','HINDUNILVR.NS']
-stock_perf = {}
-for sym in nifty50:
-    try:
-        h = yf.Ticker(sym).history(period='2d')
-        if len(h) < 2: continue
-        chg = (h['Close'].iloc[-1]/h['Close'].iloc[-2]-1)*100
-        stock_perf[sym.replace('.NS','')] = round(chg, 1)
-    except: continue
+def get_adv_dec():
+    nifty_stocks = pd.read_html('https://en.wikipedia.org/wiki/NIFTY_50')[1]['Symbol'].tolist()
+    nifty_stocks = [s + '.NS' for s in nifty_stocks]
+    df = yf.download(nifty_stocks, period='2d', interval='1d', progress=False)['Close']
+    ret = df.pct_change().iloc[-1]
+    return (ret > 0).sum(), (ret < 0).sum()
 
-top5_gainers = [s[0] for s in sorted(stock_perf.items(), key=lambda x: x[1], reverse=True)[:5]]
-top5_losers = [s[0] for s in sorted(stock_perf.items(), key=lambda x: x[1])[:5]]
+def build_email(today_data, history):
+    ist = pytz.timezone('Asia/Kolkata')
+    today = datetime.now(ist).strftime('%d-%b-%Y')
 
-# 4. Load & update history - 5 DAYS
-if os.path.exists(HISTORY_FILE):
-    with open(HISTORY_FILE) as f: history = json.load(f)
-else:
-    history = {'fii': [], 'top_sectors': {}, 'bottom_sectors': {}, 'gainers': {}, 'losers': {}}
+    # Build 5-day table
+    dates = sorted(history.keys())[-5:]
+    header = 'Date | ' + ' | '.join([d[5:] for d in dates])
+    rows = []
+    for rank in range(1, 6):
+        row = f'Rank {rank} | '
+        row += ' | '.join([history[d]['top5'][rank-1] if rank <= len(history[d]['top5']) else '-' for d in dates])
+        rows.append(row)
 
-# FII history
-history['fii'] = [h for h in history['fii'] if h['date']!= DATE]
-history['fii'] = [{'date': DATE, 'fii_cash': int(fii_cash), 'fii_fut': int(fii_fut_total),
-                   'fii_opt': int(fii_opt_total), 'dii_cash': int(dii_cash)}] + history['fii'][:4]
+    # Smart money label
+    fii, dii = today_data['fii'], today_data['dii']
+    if fii > 1000 and dii < -1000: label = 'Strong Institutional Buy'
+    elif fii < -1000 and dii > 1000: label = 'DII Rescue, FII Exit'
+    elif fii > 0 and dii > 0: label = 'Broad Based Buy'
+    elif fii < 0 and dii < 0: label = 'Distribution'
+    else: label = 'Mixed Flow'
 
-# Store by date
-history['top_sectors'][DATE] = top5_sectors
-history['bottom_sectors'][DATE] = bottom5_sectors
-history['gainers'][DATE] = top5_gainers
-history['losers'][DATE] = top5_losers
+    sectors_sorted = sorted(today_data['sectors'].items(), key=lambda x: x[1]['return'], reverse=True)
+    top5 = [s[0] for s in sectors_sorted[:5]]
 
-# Keep only last 5 dates
-dates = [h['date'] for h in history['fii']]
-history['top_sectors'] = {d: history['top_sectors'][d] for d in dates if d in history['top_sectors']}
-history['bottom_sectors'] = {d: history['bottom_sectors'][d] for d in dates if d in history['bottom_sectors']}
-history['gainers'] = {d: history['gainers'][d] for d in dates if d in history['gainers']}
-history['losers'] = {d: history['losers'][d] for d in dates if d in history['losers']}
+    body = f"""EOD REPORT | SmartMoney: {label}
 
-with open(HISTORY_FILE, 'w') as f: json.dump(history, f)
+=== TOP 5 SECTORS BY DAY ===
+{header}
+{'-'*len(header)}
+{chr(10).join(rows)}
 
-# 5. Smart Money Score - 3 day from 5-day history
-fii_3d_cash = sum(h['fii_cash'] for h in history['fii'][:3])
-fii_3d_fut = sum(h['fii_fut'] for h in history['fii'][:3])
-fii_3d_opt = sum(h['fii_opt'] for h in history['fii'][:3])
-dii_3d_cash = sum(h['dii_cash'] for h in history['fii'][:3])
+=== TODAY'S SNAPSHOT ===
+FII: {fii:+.0f} Cr | DII: {dii:+.0f} Cr | A/D: {today_data['adv']}/{today_data['dec']}
 
-smart_money_score = fii_3d_cash + (4 * fii_3d_fut) + (2 * fii_3d_opt) + (0.5 * dii_3d_cash)
-
-bias, impact = "NEUTRAL", "Sideways open."
-if smart_money_score > 5000:
-    bias, impact = "BULLISH", f"Smart Money Long ₹{smart_money_score:.0f}Cr"
-elif smart_money_score < -5000:
-    bias, impact = "BEARISH", f"Smart Money Short ₹{abs(smart_money_score):.0f}Cr"
-elif fii_3d_fut > 2000:
-    bias, impact = "BULLISH", f"FII Futures Long ₹{fii_3d_fut:.0f}Cr"
-elif fii_3d_fut < -2000:
-    bias, impact = "BEARISH", f"FII Futures Short ₹{abs(fii_3d_fut):.0f}Cr"
-
-# 6. Build email - DATE COLUMNS ON TOP
-dates = [h['date'] for h in history['fii']]
-
-body = f"""=== SMART MONEY FLOW ===
-FII Cash: {fii_cash:+.0f}Cr | FII Futures: {fii_fut_total:+.0f}Cr | FII Options: {fii_opt_total:+.0f}Cr | DII: {dii_cash:+.0f}Cr
-Smart Money Score: {smart_money_score:+.0f}Cr | Verdict: {bias} | {impact}
-
-=== FII FLOW (Cr) ===
-{'Date':<12} {' | '.join(dates)}
-{'-'*50}
+=== SECTOR DETAILS ===
+{'Sector':<8} {'Ret%':<6} {'Breadth%':<9} {'Vol x'}
+{'-'*35}
 """
-for metric in ['fii_cash', 'fii_fut', 'fii_opt', 'dii_cash']:
-    row = f"{metric:<12} "
-    row += " | ".join([f"{next((h[metric] for h in history['fii'] if h['date']==d), 0):+6.0f}" for d in dates])
-    body += row + "\n"
+    for sec, val in sectors_sorted:
+        body += f"{sec:<8} {val['return']:>5.2f} {val['breadth']:>8.0f} {val['volume']:>5.2f}\n"
 
-body += f"\n=== TOP 5 SECTORS BY DAY ===\n"
-body += f"{'Date':<7} {' | '.join(dates)}\n{'-'*50}\n"
-for i in range(5):
-    row = f"Rank {i+1:<2} "
-    row += " | ".join([f"{history['top_sectors'].get(d, ['']*5)[i] if i < len(history['top_sectors'].get(d, [])) else '':<6}" for d in dates])
-    body += row + "\n"
+    return body, top5
 
-body += f"\n=== BOTTOM 5 SECTORS BY DAY ===\n"
-body += f"{'Date':<7} {' | '.join(dates)}\n{'-'*50}\n"
-for i in range(5):
-    row = f"Rank {i+1:<2} "
-    row += " | ".join([f"{history['bottom_sectors'].get(d, ['']*5)[i] if i < len(history['bottom_sectors'].get(d, [])) else '':<6}" for d in dates])
-    body += row + "\n"
+def main():
+    ist = pytz.timezone('Asia/Kolkata')
+    now_ist = datetime.now(ist)
+    # Comment next line for testing before 8 PM
+    if not (now_ist.time() >= time(20,0) and now_ist.weekday() < 5): exit()
 
-body += f"\n=== TOP 5 GAINERS BY DAY ===\n"
-body += f"{'Date':<7} {' | '.join(dates)}\n{'-'*50}\n"
-for i in range(5):
-    row = f"Rank {i+1:<2} "
-    row += " | ".join([f"{history['gainers'].get(d, ['']*5)[i] if i < len(history['gainers'].get(d, [])) else '':<10}" for d in dates])
-    body += row + "\n"
+    # Load history
+    try:
+        with open(HISTORY_FILE) as f: history = json.load(f)
+    except: history = {}
 
-body += f"\n=== TOP 5 LOSERS BY DAY ===\n"
-body += f"{'Date':<7} {' | '.join(dates)}\n{'-'*50}\n"
-for i in range(5):
-    row = f"Rank {i+1:<2} "
-    row += " | ".join([f"{history['losers'].get(d, ['']*5)[i] if i < len(history['losers'].get(d, [])) else '':<10}" for d in dates])
-    body += row + "\n"
+    # Get data
+    fii, dii = get_fii_dii()
+    sectors = get_sector_data()
+    adv, dec = get_adv_dec()
+    today_data = {'fii': fii, 'dii': dii, 'sectors': sectors, 'adv': adv, 'dec': dec}
 
-msg = MIMEText(body)
-msg['Subject'] = f"EOD REPORT | SmartMoney {smart_money_score:+.0f}Cr | {bias}"
-msg['From'], msg['To'] = os.getenv('GMAIL_USER'), os.getenv('TO_EMAIL')
+    # Build mail + update history
+    body, top5 = build_email(today_data, history)
+    today_str = now_ist.strftime('%Y-%m-%d')
+    history[today_str] = {'top5': top5}
 
-with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
-    s.login(os.getenv('GMAIL_USER'), os.getenv('GMAIL_PASS'))
-    s.send_message(msg)
+    # Keep only last 5 days
+    if len(history) > 5:
+        for k in sorted(history.keys())[:-5]: del history[k]
+
+    with open(HISTORY_FILE, 'w') as f: json.dump(history, f)
+
+    # Send mail
+    msg = MIMEText(body)
+    msg['Subject'] = f"EOD REPORT | SmartMoney {datetime.now(ist).strftime('%d-%b')}"
+    msg['From'] = os.environ['GMAIL_USER']
+    msg['To'] = os.environ['TO_EMAIL']
+
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
+        s.login(os.environ['GMAIL_USER'], os.environ['GMAIL_PASS'])
+        s.send_message(msg)
+
+if __name__ == '__main__':
+    main()
