@@ -1,45 +1,43 @@
-import smtplib, os, requests
+import smtplib, os
 from email.mime.text import MIMEText
 from datetime import datetime
+from nsepython import nse_eq
 
-# 1. Get NSE data
 def get_nse_eod():
-    url = "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%2050"
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "*/*",
-        "Referer": "https://www.nseindia.com/"
-    }
-    session = requests.Session()
-    session.get("https://www.nseindia.com", headers=headers) # Get cookies first
-    r = session.get(url, headers=headers, timeout=10)
-    data = r.json()
+    print("Fetching Nifty 50 data...")
+    nifty_data = nse_eq("NIFTY 50")
 
-    nifty = data['data'][0]
-    adv = data['advance']
+    print("Fetching all indices...")
+    all_indices = nse_eq("all")
+    nifty_50 = all_indices[all_indices['indexName'] == 'NIFTY 50'].iloc[0]
 
-    report = f"""
-NSE EOD Report - {datetime.now().strftime('%d %b %Y, %A')}
+    # Get top gainers from Nifty 50 stocks
+    print("Fetching top gainers...")
+    from nsepython import nse_get_top_gainers
+    gainers = nse_get_top_gainers()
+    top_5 = gainers.head(5)
+
+    report = f"""NSE EOD Report - {datetime.now().strftime('%d %b %Y, %A')}
 Time: {datetime.now().strftime('%I:%M %p')} IST
 
-NIFTY 50: {nifty['last']} ({nifty['pChange']}%)
-Open: {nifty['open']} | High: {nifty['dayHigh']} | Low: {nifty['dayLow']}
+NIFTY 50: {nifty_50['last']} ({round(nifty_50['percentChange'], 2)}%)
+Open: {nifty_50['open']} | High: {nifty_50['high']} | Low: {nifty_50['low']}
+Previous Close: {nifty_50['previousClose']}
 
-Market Breadth:
-Advances: {adv['advances']} | Declines: {adv['declines']} | Unchanged: {adv['unchanged']}
-
-Top Gainers:
+Top 5 Gainers Today:
 """
-    for stock in data['data'][1:6]: # Top 5
-        report += f"{stock['symbol']}: {stock['lastPrice']} ({stock['pChange']}%)\n"
+    for idx, row in top_5.iterrows():
+        report += f"{row['symbol']}: {row['ltp']} ({row['netPrice']}%)\n"
 
     return report
 
-# 2. Send email
 def send_mail(body):
     gmail_user = os.getenv('GMAIL_USER')
     gmail_pass = os.getenv('GMAIL_PASS')
     to_email = os.getenv('TO_EMAIL')
+
+    if not all([gmail_user, gmail_pass, to_email]):
+        raise Exception("Missing email secrets")
 
     msg = MIMEText(body)
     msg['Subject'] = f"NSE EOD Report - {datetime.now().strftime('%d %b %Y')}"
@@ -52,12 +50,10 @@ def send_mail(body):
 
     print("EOD Report sent successfully to", to_email)
 
-# 3. Run
 if __name__ == "__main__":
     try:
-        print("Fetching NSE data...")
         report_body = get_nse_eod()
-        print("Sending email...")
+        print("Report generated:\n", report_body)
         send_mail(report_body)
     except Exception as e:
         print("ERROR:", str(e))
