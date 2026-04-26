@@ -16,12 +16,16 @@ jobs:
           
       - run: pip install yfinance pandas numpy pytz requests
       
-      - name: Restore history cache
-        uses: actions/cache/restore@v4
+      - name: Restore history
+        id: cache-history
+        uses: actions/cache@v4
         with:
           path: eod_history.json
-          key: eod-history-${{ github.run_id }}
-          restore-keys: eod-history-
+          key: eod-history-${{ runner.os }}-v1
+          restore-keys: eod-history-${{ runner.os }}-
+          
+      - name: Init history if missing
+        run: test -f eod_history.json || echo '{}' > eod_history.json
           
       - name: Run EOD Report
         run: python eod_report.py
@@ -29,9 +33,3 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
-          
-      - name: Save history cache
-        uses: actions/cache/save@v4
-        with:
-          path: eod_history.json
-          key: eod-history-${{ github.run_id }}
