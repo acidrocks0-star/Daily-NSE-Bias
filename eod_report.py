@@ -13,16 +13,31 @@ def safe_section(title, func):
 
 def get_report():
     report = f"NSE EOD Report - {datetime.now().strftime('%d %b %Y, %A')}\n"
-    report += f"Generated: {datetime.now().strftime('%I:%M %p')} IST\n"
-    report += f"Data: Last 5 traded days\n\n"
+    report += f"Generated: {datetime.now().strftime('%I:%M %p')} IST\n\n"
 
     def indices():
         nifty = yf.Ticker("^NSEI")
         hist = nifty.history(period="1mo")
-        hist = hist[hist['Volume'] > 0].tail(5)
+        hist = hist[hist['Volume'] > 0].tail(5) # Last 5 trading days
+
+        out = f"=== NIFTY 50 - LAST 5 TRADING DAYS ===\n"
+        out += f"Date | Close | Chg% | Volume\n"
+        out += f"-----------|----------|--------|--------\n"
+
+        for i in range(len(hist)):
+            date = hist.index[i].strftime('%d %b')
+            close = hist['Close'].iloc[i]
+            vol = hist['Volume'].iloc[i] / 10000000 # Cr
+            if i == 0:
+                chg = 0
+            else:
+                chg = ((close - hist['Close'].iloc[i-1]) / hist['Close'].iloc[i-1]) * 100
+            out += f"{date} | {close:8.2f} | {chg:6.2f}% | {vol:5.1f}Cr\n"
+
         chg_5d = ((hist['Close'].iloc[-1] - hist['Close'].iloc[0]) / hist['Close'].iloc[0]) * 100
-        day_chg = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100
-        return f"=== NIFTY 50 ===\nLTP: {hist['Close'].iloc[-1]:.2f} | 1-Day: {day_chg:.2f}% | 5-Day: {chg_5d:.2f}%\nPeriod: {hist.index[0].strftime('%d %b')} to {hist.index[-1].strftime('%d %b')}\n\n"
+        out += f"\n5-Day Return: {chg_5d:.2f}%\n"
+        out += f"Period: {hist.index[0].strftime('%d %b')} to {hist.index[-1].strftime('%d %b')}\n\n"
+        return out
 
     def sectors():
         sectors = {
@@ -41,11 +56,14 @@ def get_report():
             except: continue
 
         sec_df = pd.DataFrame(sector_perf)
+        gainers = sec_df[sec_df['pct'] > 0].nlargest(5, 'pct')
+        losers = sec_df[sec_df['pct'] <= 0].nsmallest(5, 'pct')
+
         out = f"=== SECTORS 5-DAY ===\nTop 5 Gainers:\n"
-        for _, row in sec_df.nlargest(5, 'pct').iterrows():
+        for _, row in gainers.iterrows():
             out += f"{row['name']}: {row['pct']:.2f}%\n"
         out += f"\nTop 5 Losers:\n"
-        for _, row in sec_df.nsmallest(5, 'pct').iterrows():
+        for _, row in losers.iterrows():
             out += f"{row['name']}: {row['pct']:.2f}%\n\n"
         return out
 
