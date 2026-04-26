@@ -3,107 +3,59 @@ import yfinance as yf
 import pandas as pd
 import requests
 from email.mime.text import MIMEText
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import StringIO
 
 report = f"NSE EOD Report - {datetime.now().strftime('%d %b %Y, %A')}\n"
 report += f"Generated: {datetime.now().strftime('%I:%M %p')} IST\n\n"
 
-def get_fii_dii():
-    try:
-        # NSE CSV - bypasses JSON API blocks
-        url = "https://www.nseindia.com/reports/fii-dii"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Accept-Encoding": "gzip, deflate",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1"
-        }
-        session = requests.Session()
-        r = session.get(url, headers=headers, timeout=15)
-
-        # Parse HTML table - NSE embeds data in script tag now
-        if "fiiDiiData" not in r.text:
-            return f"=== FII/DII ===\nNSE page changed. Manual check: https://www.nseindia.com/reports/fii-dii\n\n"
-
-        # Extract JSON from page
-        import re
-        match = re.search(r'var fiiDiiData = (\[.*?\]);', r.text)
-        if not match:
-            return f"=== FII/DII ===\nCould not parse NSE data\n\n"
-
-        data = json.loads(match.group(1))
-        if not data:
-            return f"=== FII/DII ===\nEmpty data\n\n"
-
-        d = data[0]
-        out = f"=== FII/DII + PRO - {d.get('date', 'N/A')} ===\n"
-
-        fii_cash = float(d.get('fiiBuyValue', 0)) - float(d.get('fiiSellValue', 0))
-        dii_cash = float(d.get('diiBuyValue', 0)) - float(d.get('diiSellValue', 0))
-        pro_cash = float(d.get('proBuyValue', 0)) - float(d.get('proSellValue', 0))
-        out += f"Cash: FII {fii_cash:+.0f}Cr | DII {dii_cash:+.0f}Cr | PRO {pro_cash:+.0f}Cr\n"
-
-        fii_idx_fut = float(d.get('fiiIndexFutBuy', 0)) - float(d.get('fiiIndexFutSell', 0))
-        dii_idx_fut = float(d.get('diiIndexFutBuy', 0)) - float(d.get('diiIndexFutSell', 0))
-        pro_idx_fut = float(d.get('proIndexFutBuy', 0)) - float(d.get('proIndexFutSell', 0))
-        out += f"Index Fut: FII {fii_idx_fut:+.0f}Cr | DII {dii_idx_fut:+.0f}Cr | PRO {pro_idx_fut:+.0f}Cr\n"
-
-        fii_idx_opt = float(d.get('fiiIndexOptBuy', 0)) - float(d.get('fiiIndexOptSell', 0))
-        dii_idx_opt = float(d.get('diiIndexOptBuy', 0)) - float(d.get('diiIndexOptSell', 0))
-        pro_idx_opt = float(d.get('proIndexOptBuy', 0)) - float(d.get('proIndexOptSell', 0))
-        out += f"Index Opt: FII {fii_idx_opt:+.0f}Cr | DII {dii_idx_opt:+.0f}Cr | PRO {pro_idx_opt:+.0f}Cr\n"
-
-        total_fii = fii_cash + fii_idx_fut + fii_idx_opt
-        total_dii = dii_cash + dii_idx_fut + dii_idx_opt
-        total_pro = pro_cash + pro_idx_fut + pro_idx_opt
-
-        def bias(val):
-            if val > 500: return "Strong Bullish"
-            if val > 100: return "Bullish"
-            if val < -500: return "Strong Bearish"
-            if val < -100: return "Bearish"
-            return "Neutral"
-
-        out += f"\nBias: FII {bias(total_fii)} ({total_fii:+.0f}Cr) | "
-        out += f"DII {bias(total_dii)} ({total_dii:+.0f}Cr) | "
-        out += f"PRO {bias(total_pro)} ({total_pro:+.0f}Cr)\n\n"
-        return out
-    except Exception as e:
-        return f"=== FII/DII ===\nFailed: {str(e)[:200]}\nCheck: https://www.nseindia.com/reports/fii-dii\n\n"
-
 def get_gift_nifty():
     try:
-        # NSE IFSC website - official source
-        url = "https://www.nseifsc.com/market-data/live-market-indices"
+        url = "https://priceapi.moneycontrol.com/pricefeed/nse/equitycash/GIFNIFTY"
         headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=10)
+        d = r.json()['data']
+        ltp = float(d['pricecurrent'])
+        pct = float(d['pricepercentchange'])
+        out = f"=== GIFT NIFTY ===\n"
+        out += f"LTP: {ltp:.2f} ({pct:+.2f}%)\n\n"
+        return out
+    except Exception as e:
+        return f"=== GIFT NIFTY ===\nData unavailable: {str(e)[:100]}\n\n"
 
-        # Parse GIFT Nifty from HTML
-        import re
-        match = re.search(r'GIFT Nifty.*?([\d,]+\.?\d*)', r.text)
-        if match:
-            price = float(match.group(1).replace(',', ''))
-            out = f"=== GIFT NIFTY ===\n"
-            out += f"LTP: {price:.2f}\n\n"
-            return out
-        return f"=== GIFT NIFTY ===\nNo data on NSE IFSC\n\n"
-    except:
-        try:
-            # Fallback: Use Nifty 50 futures as proxy
-            nifty = yf.Ticker("^NSEI")
-            hist = nifty.history(period="2d")
-            if len(hist) >= 2:
-                ltp = hist['Close'].iloc[-1]
-                pct = ((ltp - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100
-                out = f"=== GIFT NIFTY ===\n"
-                out += f"*Using Nifty50 proxy - Gift data blocked*\n"
-                out += f"LTP: {ltp:.2f} ({pct:+.2f}%)\n\n"
+def get_top_delivery_stocks():
+    try:
+        # NSE posts bhavcopy after 6:30 PM. Try today, fallback to yesterday.
+        for days_back in [0, 1, 2]:
+            date_obj = datetime.now() - timedelta(days=days_back)
+            # Skip weekends
+            if date_obj.weekday() >= 5:
+                continue
+            date_str = date_obj.strftime('%d%m%Y')
+            url = f"https://archives.nseindia.com/products/content/sec_bhavdata_full_{date_str}.csv"
+            headers = {"User-Agent": "Mozilla/5.0"}
+            r = requests.get(url, headers=headers, timeout=15)
+
+            if r.status_code == 200 and len(r.text) > 1000:
+                df = pd.read_csv(StringIO(r.text))
+                df = df[df['SERIES'] == 'EQ']
+                df['DELIV_PER'] = pd.to_numeric(df['DELIV_PER'], errors='coerce')
+                df = df.dropna(subset=['DELIV_PER'])
+                top3 = df.nlargest(3, 'DELIV_PER')[['SYMBOL', 'DELIV_PER', 'CLOSE_PRICE']]
+
+                out = f"=== TOP 3 HIGH DELIVERY - {date_obj.strftime('%d %b')} ===\n"
+                for _, row in top3.iterrows():
+                    out += f"{row['SYMBOL']}: {row['DELIV_PER']:.1f}% @ {row['CLOSE_PRICE']:.2f}\n"
+                out += "\n"
                 return out
-        except: pass
-        return f"=== GIFT NIFTY ===\nData unavailable\n\n"
+
+        return f"=== DELIVERY DATA ===\nBhavcopy not available for last 3 days\n\n"
+    except Exception as e:
+        return f"=== DELIVERY DATA ===\nFailed: {str(e)[:150]}\n\n"
+
+def get_fii_dii():
+    # NSE blocks GitHub Actions. Providing direct link instead.
+    return f"=== FII/DII + PRO ===\nCheck manually: https://www.nseindia.com/reports/fii-dii\nReason: NSE blocks cloud IPs\n\n"
 
 try:
     stocks = [
@@ -177,8 +129,9 @@ try:
             report += f"Sectors: Gainers: {sec_gain} | Losers: {sec_loss}\n"
         report += f"\n"
 
-    report += get_fii_dii()
+    report += get_top_delivery_stocks()
     report += get_gift_nifty()
+    report += get_fii_dii()
 
 except Exception as e:
     report += f"\nERROR: {str(e)}\n"
