@@ -23,7 +23,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: eod-history
-          path:.
+          path:. # space after colon is required
         continue-on-error: true
 
       - name: Init history if missing
