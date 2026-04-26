@@ -4,6 +4,7 @@ import pandas as pd
 import requests
 from email.mime.text import MIMEText
 from datetime import datetime
+import json
 
 report = f"NSE EOD Report - {datetime.now().strftime('%d %b %Y, %A')}\n"
 report += f"Generated: {datetime.now().strftime('%I:%M %p')} IST\n\n"
@@ -12,30 +13,37 @@ def get_fii_dii():
     try:
         url = "https://www.nseindia.com/api/fiidiiTradeReact"
         headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "*/*",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
             "Referer": "https://www.nseindia.com/reports/fii-dii"
         }
         session = requests.Session()
-        session.get("https://www.nseindia.com", headers=headers, timeout=5)
-        r = session.get(url, headers=headers, timeout=10)
+        session.get("https://www.nseindia.com", headers=headers, timeout=10)
+        r = session.get(url, headers=headers, timeout=15)
         data = r.json()
 
-        out = f"=== FII/DII + PRO - {data[0]['date']} ===\n"
+        # NSE now returns array with different keys
+        if not data or len(data) == 0:
+            return "=== FII/DII ===\nNo data returned\n\n"
 
-        fii_cash = float(data[0]['fiiBuyValue']) - float(data[0]['fiiSellValue'])
-        dii_cash = float(data[0]['diiBuyValue']) - float(data[0]['diiSellValue'])
-        pro_cash = float(data[0]['proBuyValue']) - float(data[0]['proSellValue'])
+        d = data[0] # Latest date
+        out = f"=== FII/DII + PRO - {d.get('date', 'N/A')} ===\n"
+
+        # New NSE keys as of 2026
+        fii_cash = float(d.get('fiiCashBuyValue', 0)) - float(d.get('fiiCashSellValue', 0))
+        dii_cash = float(d.get('diiCashBuyValue', 0)) - float(d.get('diiCashSellValue', 0))
+        pro_cash = float(d.get('proCashBuyValue', 0)) - float(d.get('proCashSellValue', 0))
         out += f"Cash: FII {fii_cash:+.0f}Cr | DII {dii_cash:+.0f}Cr | PRO {pro_cash:+.0f}Cr\n"
 
-        fii_idx_fut = float(data[0]['fiiIndexFutBuy']) - float(data[0]['fiiIndexFutSell'])
-        dii_idx_fut = float(data[0]['diiIndexFutBuy']) - float(data[0]['diiIndexFutSell'])
-        pro_idx_fut = float(data[0]['proIndexFutBuy']) - float(data[0]['proIndexFutSell'])
+        fii_idx_fut = float(d.get('fiiIndexFutBuyValue', 0)) - float(d.get('fiiIndexFutSellValue', 0))
+        dii_idx_fut = float(d.get('diiIndexFutBuyValue', 0)) - float(d.get('diiIndexFutSellValue', 0))
+        pro_idx_fut = float(d.get('proIndexFutBuyValue', 0)) - float(d.get('proIndexFutSellValue', 0))
         out += f"Index Fut: FII {fii_idx_fut:+.0f}Cr | DII {dii_idx_fut:+.0f}Cr | PRO {pro_idx_fut:+.0f}Cr\n"
 
-        fii_idx_opt = float(data[0]['fiiIndexOptBuy']) - float(data[0]['fiiIndexOptSell'])
-        dii_idx_opt = float(data[0]['diiIndexOptBuy']) - float(data[0]['diiIndexOptSell'])
-        pro_idx_opt = float(data[0]['proIndexOptBuy']) - float(data[0]['proIndexOptSell'])
+        fii_idx_opt = float(d.get('fiiIndexOptBuyValue', 0)) - float(d.get('fiiIndexOptSellValue', 0))
+        dii_idx_opt = float(d.get('diiIndexOptBuyValue', 0)) - float(d.get('diiIndexOptSellValue', 0))
+        pro_idx_opt = float(d.get('proIndexOptBuyValue', 0)) - float(d.get('proIndexOptSellValue', 0))
         out += f"Index Opt: FII {fii_idx_opt:+.0f}Cr | DII {dii_idx_opt:+.0f}Cr | PRO {pro_idx_opt:+.0f}Cr\n"
 
         total_fii = fii_cash + fii_idx_fut + fii_idx_opt
@@ -54,23 +62,31 @@ def get_fii_dii():
         out += f"PRO {bias(total_pro)} ({total_pro:+.0f}Cr)\n\n"
         return out
     except Exception as e:
-        return f"=== FII/DII ===\nData failed: {str(e)[:100]}\n\n"
+        return f"=== FII/DII ===\nData failed: {str(e)[:150]}\n\n"
 
 def get_gift_nifty():
     try:
-        url = "https://www.nseindia.com/api/equity-stockIndices?index=GIFT%20NIFTY"
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
-        session = requests.Session()
-        session.get("https://www.nseindia.com", headers=headers, timeout=5)
-        r = session.get(url, headers=headers, timeout=10)
+        # Use Investing.com - more stable
+        url = "https://api.investing.com/api/financialdata/1175151/chart/?period=P1D&interval=PT5M"
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Domain-Id": "www"
+        }
+        r = requests.get(url, headers=headers, timeout=10)
         data = r.json()
-        last = data['data'][0]['last']
-        pchange = data['data'][0]['pChange']
-        out = f"=== GIFT NIFTY ===\n"
-        out += f"LTP: {last} ({pchange:+.2f}%)\n\n"
-        return out
+        candles = data['data']
+        if candles and len(candles) > 0:
+            last_candle = candles[-1]
+            price = last_candle[1] # Close
+            prev_close = candles[-2][1] if len(candles) > 1 else price
+            change = price - prev_close
+            pct = (change / prev_close * 100) if prev_close else 0
+            out = f"=== GIFT NIFTY ===\n"
+            out += f"LTP: {price:.2f} ({pct:+.2f}%)\n\n"
+            return out
+        return f"=== GIFT NIFTY ===\nNo data\n\n"
     except Exception as e:
-        return f"=== GIFT NIFTY ===\nData failed: {str(e)[:100]}\n\n"
+        return f"=== GIFT NIFTY ===\nData failed: {str(e)[:150]}\n\n"
 
 try:
     stocks = [
