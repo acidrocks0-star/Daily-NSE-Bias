@@ -10,37 +10,81 @@ report = f"NSE EOD Report - {datetime.now().strftime('%d %b %Y, %A')}\n"
 report += f"Generated: {datetime.now().strftime('%I:%M %p')} IST\n\n"
 
 def get_gift_nifty():
+    # Try 3 sources in order: Moneycontrol -> NSE IFSC -> Yahoo Nifty proxy
     try:
-        url = "https://priceapi.moneycontrol.com/pricefeed/nse/equitycash/GIFNIFTY"
+        # 1. Moneycontrol - current working endpoint
+        url = "https://priceapi.moneycontrol.com/pricefeed/notapplicable/GIFNIFTY"
         headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=10)
-        d = r.json()['data']
-        ltp = float(d['pricecurrent'])
-        pct = float(d['pricepercentchange'])
-        out = f"=== GIFT NIFTY ===\n"
-        out += f"LTP: {ltp:.2f} ({pct:+.2f}%)\n\n"
-        return out
-    except Exception as e:
-        return f"=== GIFT NIFTY ===\nData unavailable: {str(e)[:100]}\n\n"
+        if r.status_code == 200:
+            j = r.json()
+            if 'data' in j:
+                d = j['data']
+                ltp = float(d.get('pricecurrent', 0))
+                pct = float(d.get('pricepercentchange', 0))
+                if ltp > 0:
+                    out = f"=== GIFT NIFTY ===\n"
+                    out += f"LTP: {ltp:.2f} ({pct:+.2f}%)\n\n"
+                    return out
+    except: pass
+
+    try:
+        # 2. NSE IFSC
+        url = "https://www.nseifsc.com/api/market-data/indices/GIFT%20NIFTY"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            d = r.json()
+            ltp = float(d.get('lastPrice', 0))
+            pct = float(d.get('pChange', 0))
+            if ltp > 0:
+                out = f"=== GIFT NIFTY ===\n"
+                out += f"LTP: {ltp:.2f} ({pct:+.2f}%)\n\n"
+                return out
+    except: pass
+
+    try:
+        # 3. Fallback: Nifty50 futures proxy
+        nifty = yf.Ticker("^NSEI")
+        hist = nifty.history(period="2d")
+        if len(hist) >= 2:
+            ltp = hist['Close'].iloc[-1]
+            pct = ((ltp - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100
+            out = f"=== GIFT NIFTY ===\n"
+            out += f"*Using Nifty50 proxy*\n"
+            out += f"LTP: {ltp:.2f} ({pct:+.2f}%)\n\n"
+            return out
+    except: pass
+
+    return f"=== GIFT NIFTY ===\nData unavailable from all sources\n\n"
 
 def get_top_delivery_stocks():
     try:
-        # NSE posts bhavcopy after 6:30 PM. Try today, fallback to yesterday.
-        for days_back in [0, 1, 2]:
+        for days_back in [0, 1, 2, 3]:
             date_obj = datetime.now() - timedelta(days=days_back)
-            # Skip weekends
-            if date_obj.weekday() >= 5:
+            if date_obj.weekday() >= 5: # Skip Sat/Sun
                 continue
             date_str = date_obj.strftime('%d%m%Y')
             url = f"https://archives.nseindia.com/products/content/sec_bhavdata_full_{date_str}.csv"
             headers = {"User-Agent": "Mozilla/5.0"}
             r = requests.get(url, headers=headers, timeout=15)
 
-            if r.status_code == 200 and len(r.text) > 1000:
+            if r.status_code == 200 and 'SYMBOL' in r.text:
                 df = pd.read_csv(StringIO(r.text))
+                # NSE CSV has spaces in column names: ' SERIES ', ' DELIV_PER '
+                df.columns = df.columns.str.strip() # Remove leading/trailing spaces
+
+                if 'SERIES' not in df.columns or 'DELIV_PER' not in df.columns:
+                    continue
+
                 df = df[df['SERIES'] == 'EQ']
                 df['DELIV_PER'] = pd.to_numeric(df['DELIV_PER'], errors='coerce')
                 df = df.dropna(subset=['DELIV_PER'])
+                df = df[df['DELIV_PER'] > 0] # Filter out 0% delivery
+
+                if len(df) == 0:
+                    continue
+
                 top3 = df.nlargest(3, 'DELIV_PER')[['SYMBOL', 'DELIV_PER', 'CLOSE_PRICE']]
 
                 out = f"=== TOP 3 HIGH DELIVERY - {date_obj.strftime('%d %b')} ===\n"
@@ -49,12 +93,11 @@ def get_top_delivery_stocks():
                 out += "\n"
                 return out
 
-        return f"=== DELIVERY DATA ===\nBhavcopy not available for last 3 days\n\n"
+        return f"=== DELIVERY DATA ===\nBhavcopy not found for last 3 trading days\n\n"
     except Exception as e:
         return f"=== DELIVERY DATA ===\nFailed: {str(e)[:150]}\n\n"
 
 def get_fii_dii():
-    # NSE blocks GitHub Actions. Providing direct link instead.
     return f"=== FII/DII + PRO ===\nCheck manually: https://www.nseindia.com/reports/fii-dii\nReason: NSE blocks cloud IPs\n\n"
 
 try:
