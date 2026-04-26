@@ -4,14 +4,12 @@ import pandas as pd
 import requests
 from email.mime.text import MIMEText
 from datetime import datetime
-from io import StringIO
 
 report = f"NSE EOD Report - {datetime.now().strftime('%d %b %Y, %A')}\n"
 report += f"Generated: {datetime.now().strftime('%I:%M %p')} IST\n\n"
 
 def get_fii_dii():
     try:
-        # NSE FII/DII data - Cash + F&O
         url = "https://www.nseindia.com/api/fiidiiTradeReact"
         headers = {
             "User-Agent": "Mozilla/5.0",
@@ -25,28 +23,21 @@ def get_fii_dii():
 
         out = f"=== FII/DII + PRO - {data[0]['date']} ===\n"
 
-        # Cash Market
         fii_cash = float(data[0]['fiiBuyValue']) - float(data[0]['fiiSellValue'])
         dii_cash = float(data[0]['diiBuyValue']) - float(data[0]['diiSellValue'])
         pro_cash = float(data[0]['proBuyValue']) - float(data[0]['proSellValue'])
-
         out += f"Cash: FII {fii_cash:+.0f}Cr | DII {dii_cash:+.0f}Cr | PRO {pro_cash:+.0f}Cr\n"
 
-        # F&O - Index Futures
         fii_idx_fut = float(data[0]['fiiIndexFutBuy']) - float(data[0]['fiiIndexFutSell'])
         dii_idx_fut = float(data[0]['diiIndexFutBuy']) - float(data[0]['diiIndexFutSell'])
         pro_idx_fut = float(data[0]['proIndexFutBuy']) - float(data[0]['proIndexFutSell'])
-
         out += f"Index Fut: FII {fii_idx_fut:+.0f}Cr | DII {dii_idx_fut:+.0f}Cr | PRO {pro_idx_fut:+.0f}Cr\n"
 
-        # F&O - Index Options Net
         fii_idx_opt = float(data[0]['fiiIndexOptBuy']) - float(data[0]['fiiIndexOptSell'])
         dii_idx_opt = float(data[0]['diiIndexOptBuy']) - float(data[0]['diiIndexOptSell'])
         pro_idx_opt = float(data[0]['proIndexOptBuy']) - float(data[0]['proIndexOptSell'])
-
         out += f"Index Opt: FII {fii_idx_opt:+.0f}Cr | DII {dii_idx_opt:+.0f}Cr | PRO {pro_idx_opt:+.0f}Cr\n"
 
-        # Bias calculation
         total_fii = fii_cash + fii_idx_fut + fii_idx_opt
         total_dii = dii_cash + dii_idx_fut + dii_idx_opt
         total_pro = pro_cash + pro_idx_fut + pro_idx_opt
@@ -67,32 +58,19 @@ def get_fii_dii():
 
 def get_gift_nifty():
     try:
-        # Investing.com Gift Nifty
-        url = "https://api.investing.com/api/financialdata/1175151/historical/chart/?interval=PT1M&pointscount=1"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=10)
+        url = "https://www.nseindia.com/api/equity-stockIndices?index=GIFT%20NIFTY"
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
+        session = requests.Session()
+        session.get("https://www.nseindia.com", headers=headers, timeout=5)
+        r = session.get(url, headers=headers, timeout=10)
         data = r.json()
-        price = data['data'][0][1]
-        change = data['data'][0][2]
+        last = data['data'][0]['last']
+        pchange = data['data'][0]['pChange']
         out = f"=== GIFT NIFTY ===\n"
-        out += f"LTP: {price:.2f} ({change:+.2f}%)\n\n"
+        out += f"LTP: {last} ({pchange:+.2f}%)\n\n"
         return out
-    except:
-        try:
-            # Fallback: NSE India Gift Nifty
-            url = "https://www.nseindia.com/api/equity-stockIndices?index=GIFT NIFTY"
-            headers = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
-            session = requests.Session()
-            session.get("https://www.nseindia.com", headers=headers, timeout=5)
-            r = session.get(url, headers=headers, timeout=10)
-            data = r.json()
-            last = data['data'][0]['last']
-            pchange = data['data'][0]['pChange']
-            out = f"=== GIFT NIFTY ===\n"
-            out += f"LTP: {last} ({pchange:+.2f}%)\n\n"
-            return out
-        except Exception as e:
-            return f"=== GIFT NIFTY ===\nData failed: {str(e)[:100]}\n\n"
+    except Exception as e:
+        return f"=== GIFT NIFTY ===\nData failed: {str(e)[:100]}\n\n"
 
 try:
     stocks = [
@@ -154,16 +132,18 @@ try:
         report += f"--- {day_str} ---\n"
         if daily_perf:
             df = pd.DataFrame(daily_perf)
-            report += f"Stocks: Gainers: {', '.join([f'{r['symbol']}({r['pct']:+.1f}%)' for _, r in df.nlargest(3, 'pct').iterrows()])} | "
-            report += f"Losers: {', '.join([f'{r['symbol']}({r['pct']:+.1f}%)' for _, r in df.nsmallest(3, 'pct').iterrows()])}\n"
-            report += f"Vol Surge: {', '.join([f'{r['symbol']}({r['vol_surge']:+.0f}%)' for _, r in df.nlargest(3, 'vol_surge').iterrows()])}\n"
+            gainers = ", ".join([f"{r['symbol']}({r['pct']:+.1f}%)" for _, r in df.nlargest(3, 'pct').iterrows()])
+            losers = ", ".join([f"{r['symbol']}({r['pct']:+.1f}%)" for _, r in df.nsmallest(3, 'pct').iterrows()])
+            vol_surge = ", ".join([f"{r['symbol']}({r['vol_surge']:+.0f}%)" for _, r in df.nlargest(3, 'vol_surge').iterrows()])
+            report += f"Stocks: Gainers: {gainers} | Losers: {losers}\n"
+            report += f"Vol Surge: {vol_surge}\n"
         if sector_perf:
             sec_df = pd.DataFrame(sector_perf)
-            report += f"Sectors: Gainers: {', '.join([f'{r['name']}({r['pct']:+.1f}%)' for _, r in sec_df.nlargest(3, 'pct').iterrows()])} | "
-            report += f"Losers: {', '.join([f'{r['name']}({r['pct']:+.1f}%)' for _, r in sec_df.nsmallest(3, 'pct').iterrows()])}\n"
+            sec_gain = ", ".join([f"{r['name']}({r['pct']:+.1f}%)" for _, r in sec_df.nlargest(3, 'pct').iterrows()])
+            sec_loss = ", ".join([f"{r['name']}({r['pct']:+.1f}%)" for _, r in sec_df.nsmallest(3, 'pct').iterrows()])
+            report += f"Sectors: Gainers: {sec_gain} | Losers: {sec_loss}\n"
         report += f"\n"
 
-    # Add FII/DII + Gift Nifty - 1 day only
     report += get_fii_dii()
     report += get_gift_nifty()
 
@@ -171,7 +151,6 @@ except Exception as e:
     report += f"\nERROR: {str(e)}\n"
     report += f"Traceback:\n{traceback.format_exc()}\n"
 
-# Send email
 gmail_user = os.getenv('GMAIL_USER')
 gmail_pass = os.getenv('GMAIL_PASS')
 to_email = os.getenv('TO_EMAIL')
